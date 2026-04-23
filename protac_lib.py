@@ -13,11 +13,34 @@ import glob
 import random
 import copy
 
+def _read_sdf(path, sanitize=True):
+    """Read the first mol from an SDF, falling back to sanitize=False for
+    ligands (e.g. JQ1-derivatives) that OpenBabel's addH leaves in a state
+    the RDKit sanitizer rejects."""
+    mol = Chem.SDMolSupplier(path, sanitize=sanitize)[0]
+    if mol is None and sanitize:
+        mol = Chem.SDMolSupplier(path, sanitize=False)[0]
+        if mol is not None:
+            try:
+                Chem.SanitizeMol(mol, sanitizeOps=Chem.SANITIZE_ALL ^ Chem.SANITIZE_PROPERTIES)
+            except Exception:
+                pass
+    return mol
+
 def get_mcs_sdf(old_sdf, new_sdf, protac):
     utils.addH_sdf(old_sdf)
     OldSdf = Chem.SDMolSupplier(old_sdf)[0]
-    if OldSdf == None:
-        return False, old_sdf + ' is not readable by RDKit.'
+    if OldSdf is None:
+        # Fall back to unsanitized read for ligands that trip the sanitizer,
+        # e.g. cationic nitrogens in JQ1-like thienotriazolodiazepines that
+        # OpenBabel's addH marks as radicals. Try a minimal sanitize after.
+        OldSdf = Chem.SDMolSupplier(old_sdf, sanitize=False)[0]
+        if OldSdf is None:
+            return False, old_sdf + ' is not readable by RDKit.'
+        try:
+            Chem.SanitizeMol(OldSdf, sanitizeOps=Chem.SANITIZE_ALL ^ Chem.SANITIZE_PROPERTIES)
+        except Exception:
+            pass
     PROTAC = Chem.MolFromSmiles(protac)
     print(Chem.MolToSmiles(OldSdf))
     print(Chem.MolToSmiles(PROTAC))
@@ -28,45 +51,90 @@ def get_mcs_sdf(old_sdf, new_sdf, protac):
     print(OldSdf.GetNumHeavyAtoms())
     if mcs_patt.GetNumHeavyAtoms() < OldSdf.GetNumHeavyAtoms() * 0.6:
         return False, 'The MCS (maximal common substructure) is below the size threshold (at least 60 percent) compared with ' + old_sdf + '.'
-    rwmol = Chem.RWMol(mcs_patt)
-    rwconf = Chem.Conformer(rwmol.GetNumAtoms())
+    # Build a proper substructure mol from OldSdf's atoms (with real bond
+    # orders and valences) in MCS-traversal order. The previous approach of
+    # writing the SMARTS-derived RWMol as SDF produced a file that
+    # SDMolSupplier cannot parse, because SMARTS atoms lack well-defined
+    # chemistry.
     Match = OldSdf.GetSubstructMatch(mcs_patt)
-    for i, m in enumerate(Match):
-        rwconf.SetAtomPosition(i, OldSdf.GetConformer().GetAtomPosition(m))
-    rwmol.AddConformer(rwconf)
+    submol = Chem.RWMol()
+    orig_to_sub = {}
+    for new_idx, orig_idx in enumerate(Match):
+        atom = Chem.Atom(OldSdf.GetAtomWithIdx(orig_idx))
+        added = submol.AddAtom(atom)
+        orig_to_sub[orig_idx] = added
+    for bond in OldSdf.GetBonds():
+        a, b = bond.GetBeginAtomIdx(), bond.GetEndAtomIdx()
+        if a in orig_to_sub and b in orig_to_sub:
+            submol.AddBond(orig_to_sub[a], orig_to_sub[b], bond.GetBondType())
+    submol = submol.GetMol()
+    conf = Chem.Conformer(submol.GetNumAtoms())
+    for orig_idx, sub_idx in orig_to_sub.items():
+        conf.SetAtomPosition(sub_idx, OldSdf.GetConformer().GetAtomPosition(orig_idx))
+    submol.AddConformer(conf)
+    try:
+        Chem.SanitizeMol(submol)
+    except Exception:
+        pass
     writer = Chem.SDWriter(new_sdf)
-    writer.write(rwmol)
+    writer.write(submol)
+    writer.close()
     print(new_sdf)
-    NewSdf = Chem.SDMolSupplier(new_sdf, sanitize=False)[0]
-    NewSdf = Chem.MolFromSmarts(Chem.MolToSmarts(NewSdf))
+
+    # Identify the anchor: the MCS atom whose counterpart in the PROTAC has
+    # at least one bond to an atom NOT in the MCS. That atom is where the
+    # linker extends out of the warhead and should be the docking anchor.
+    # If more than one qualifies (rare — typically only one attachment
+    # point), pick the one with the most "extra" PROTAC neighbors.
+    protac_match = PROTAC.GetSubstructMatch(mcs_patt)
+    if len(protac_match) == mcs_patt.GetNumAtoms():
+        protac_match_set = set(protac_match)
+        best_i, best_extra = 0, -1
+        for i, protac_idx in enumerate(protac_match):
+            extra = sum(
+                1 for n in PROTAC.GetAtomWithIdx(protac_idx).GetNeighbors()
+                if n.GetIdx() not in protac_match_set
+            )
+            if extra > best_extra:
+                best_extra, best_i = extra, i
+        if best_extra > 0:
+            # best_i is the MCS-atom index; submol atoms are in MCS order, so
+            # anchor in SubA.sdf == best_i.
+            return True, best_i
+
+    # Fallback to the original automorphism-based heuristic if we couldn't
+    # localize the attachment point (e.g. the PROTAC itself is the ligand).
+    NewSdf = submol
     Matches = NewSdf.GetSubstructMatches(NewSdf, uniquify=False)
-    print(Matches)
     if len(Matches) == 0:
         return False, ''
     elif len(Matches) == 1:
         return True, 0
-    else:
-        for i in range(len(Matches[0])):
-            a = Matches[0][i]
-            allowed = True
-            for j in Matches[1:]:
-                if not a == j[i]:
-                    allowed = False
-                    break
-            if allowed:
-                return True, a
-    return False, 'The MCS (maximal common substructure) between the PROTAC smiles and ' + LIG[i] + ' ligand does not have an anchor atom which is uniquly defined in regard to smiles.'
+    for i in range(len(Matches[0])):
+        a = Matches[0][i]
+        if all(a == j[i] for j in Matches[1:]):
+            return True, a
+    return False, 'The MCS between the PROTAC and the ligand does not have a uniquely defined anchor atom.'
 
 def translate_anchors(old_sdf, new_sdf, old_anchor):
+    # Read both files with matching sanitize settings so bond-order perception
+    # doesn't desynchronize them and break the substructure match.
     OldSdf = Chem.SDMolSupplier(old_sdf, sanitize=False)[0]
-    NewSdf = Chem.SDMolSupplier(new_sdf, sanitize=True)[0]
-    print(Chem.MolToSmiles(OldSdf))
-    print(Chem.MolToSmiles(NewSdf))
+    NewSdf = Chem.SDMolSupplier(new_sdf, sanitize=False)[0]
+    if NewSdf is None:
+        NewSdf = Chem.SDMolSupplier(new_sdf, sanitize=True)[0]
+    print("translate_anchors old:", Chem.MolToSmiles(OldSdf))
+    print("translate_anchors new:", Chem.MolToSmiles(NewSdf))
     NewMatch = NewSdf.GetSubstructMatch(OldSdf)
     if len(NewMatch) == 0:
-        print("Im here")
+        # Retry with a SMARTS-only query (matches atomic numbers/connectivity,
+        # ignores bond orders) for cases where sanitize perception still diverges.
+        query = Chem.MolFromSmarts(Chem.MolToSmarts(OldSdf))
+        if query is not None:
+            NewMatch = NewSdf.GetSubstructMatch(query)
+    if len(NewMatch) == 0:
         return -1
-    print(NewMatch)
+    print("translate_anchors match:", NewMatch)
     return NewMatch[old_anchor]
 
 def rmsd(query, ref, q_match, r_match):
@@ -146,8 +214,8 @@ def SampleDist(Heads, Anchors, Linkers, n = 200, output_hist="initial_distances.
     with open(Linkers, 'r') as f:
         linkers = [Chem.MolFromSmiles(f.readline().split()[0])]
     #loading the heads sdf files
-    HeadA = Chem.SDMolSupplier(HeadA_sdf)[0]
-    HeadB = Chem.SDMolSupplier(HeadB_sdf)[0]
+    HeadA = _read_sdf(HeadA_sdf)
+    HeadB = _read_sdf(HeadB_sdf)
     origin = Point3D(0,0,0)
     anchor_a = HeadA.GetConformer().GetAtomPosition(Anchors[0])
     translateMol(HeadA, origin, anchor_a)
@@ -231,8 +299,8 @@ def GenRandConf(Heads, Anchors, Linkers, n=1000, output_hist="initial_distances.
     with open(Linkers, 'r') as f:
         linkers = [Chem.MolFromSmiles(f.readline().split()[0])]
     #loading the heads sdf files
-    HeadA = Chem.SDMolSupplier(HeadA_sdf)[0]
-    HeadB = Chem.SDMolSupplier(HeadB_sdf)[0]
+    HeadA = _read_sdf(HeadA_sdf)
+    HeadB = _read_sdf(HeadB_sdf)
     #anchor distances
     X1Y1_dist = []
     for linker in linkers:
@@ -263,9 +331,9 @@ def GenConstConf(Heads, Docked_Heads, Head_Linkers, output_sdf, Anchor_A, v_atom
     with open(Head_Linkers, 'r') as f:
         head_linkers = [Chem.MolFromSmiles(f.readline().split()[0])]
     #loading the heads sdf files
-    HeadA = Chem.SDMolSupplier(Heads[0])[0]
-    HeadB = Chem.SDMolSupplier(Heads[1])[0]
-    docked_heads = Chem.SDMolSupplier(Docked_Heads)[0]
+    HeadA = _read_sdf(Heads[0])
+    HeadB = _read_sdf(Heads[1])
+    docked_heads = _read_sdf(Docked_Heads)
     #virtual atoms around the center of mass for the neighbor atom alignment
     num_atoms = docked_heads.GetConformer().GetNumAtoms()
     x = []
@@ -279,6 +347,10 @@ def GenConstConf(Heads, Docked_Heads, Head_Linkers, output_sdf, Anchor_A, v_atom
     v2 = Point3D(sum(x)/num_atoms + 1, sum(y)/num_atoms, sum(z)/num_atoms)
     v3 = Point3D(sum(x)/num_atoms, sum(y)/num_atoms + 1, sum(z)/num_atoms)
     virtual_atoms = Chem.MolFromSmarts('[#23][#23][#23]')
+    # MolFromSmarts skips valence perception; EmbedMolecule in RDKit 2024+
+    # requires implicit-H counts to be populated.
+    virtual_atoms = Chem.RWMol(virtual_atoms)
+    virtual_atoms.UpdatePropertyCache(strict=False)
     Chem.rdDistGeom.EmbedMolecule(virtual_atoms)
     virtual_atoms.GetConformer().SetAtomPosition(1, v1)
     virtual_atoms.GetConformer().SetAtomPosition(0, v2)
@@ -301,6 +373,19 @@ def GenConstConf(Heads, Docked_Heads, Head_Linkers, output_sdf, Anchor_A, v_atom
         else:
             head_A_list = head_linker.GetSubstructMatches(HeadA, uniquify=False)
             head_B_list = head_linker.GetSubstructMatches(HeadB, uniquify=False)
+            # Fall back to MCS-based matching if direct sanitized match fails
+            # (sanitized vs non-sanitized bond-order perception can make the
+            # exact substructure search return empty).
+            if len(head_A_list) == 0:
+                mcs = rdFMCS.FindMCS([head_linker, HeadA])
+                patt = Chem.MolFromSmarts(mcs.smartsString)
+                head_A_list = head_linker.GetSubstructMatches(patt, uniquify=False)
+            if len(head_B_list) == 0:
+                mcs = rdFMCS.FindMCS([head_linker, HeadB])
+                patt = Chem.MolFromSmarts(mcs.smartsString)
+                head_B_list = head_linker.GetSubstructMatches(patt, uniquify=False)
+            if len(head_A_list) == 0 or len(head_B_list) == 0:
+                return -1, v_atoms_sdf
 
         i = 0
         seed = 0
@@ -347,8 +432,8 @@ def GenConstConf(Heads, Docked_Heads, Head_Linkers, output_sdf, Anchor_A, v_atom
 #printing head RMSD, calculated between a modeled PROTAC, and the .sdf files of the two binders (headA, headB)
 def print_rmsd(headA, headB, Head_Linkers):
     #loading the heads sdf files                                                                                      
-    HeadA = Chem.SDMolSupplier(headA)[0]
-    HeadB = Chem.SDMolSupplier(headB)[0]
+    HeadA = _read_sdf(headA)
+    HeadB = _read_sdf(headB)
     head_linkers = Chem.SDMolSupplier(Head_Linkers)
     for head_linker in head_linkers:
         mcsA = rdFMCS.FindMCS([HeadA, head_linker])

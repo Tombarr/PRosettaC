@@ -39,8 +39,12 @@ RUN conda config --set always_yes true \
         pymol-open-source \
  && mamba create -n py27 -c conda-forge python=2.7 \
  && conda clean -afy \
- && ln -sf /opt/conda/envs/py27/bin/python2.7 /usr/local/bin/python2.7 \
- && ln -sf /opt/conda/envs/prosettac/bin/obabel /opt/conda/envs/prosettac/bin/babel
+ && ln -sf /opt/conda/envs/py27/bin/python2.7 /usr/local/bin/python2.7
+
+# OpenBabel 3 renamed the "babel" command to "obabel" and changed its
+# argument syntax. PRosettaC's utils.py invokes $OB/babel with the old
+# syntax. Install a shim under the conda env's bin dir that translates.
+COPY docker/babel-shim.sh /opt/conda/envs/prosettac/bin/babel
 
 # Sparse-checkout only the Python helper subtrees PRosettaC needs from the
 # public RosettaCommons repos at pinned commit SHAs. The compiled binary and

@@ -66,7 +66,9 @@ def main(name, argv):
 s.\n')
                                 sys.exit()
                 except Exception:
-                        log.write('ERROR: Unexpected error ocurred when trying to choose anchor atoms from ' + LIG[i] + '. Please check your input files for any mistakes and irregularities. If using a PDB, it could be that this is a problem with RDKit that cannot read the .sdf that is produced by the seperation. In this case, you can also try supplying the .sdf file manually, with the hydrogens added correctly. Also, you can simply try a different PDB template.\n')
+                        import traceback
+                        log.write('ERROR: Unexpected error ocurred when trying to choose anchor atoms from ' + LIG[i] + '.\n')
+                        log.write('Traceback:\n' + traceback.format_exc() + '\n')
                         sys.exit()
                 #Anchors.append(pl.get_mcs_sdf(Heads[i], Subs[i], protac))
                 #if Anchors[i] == None:
@@ -120,6 +122,7 @@ s.\n')
                 Global = 1000
         else:
                 Global = 500
+        Global = int(os.environ.get('PROSETTAC_GLOBAL', Global))
         Num_Results = utils.patchdock(Structs, [a + 1 for a in Anchors], min_value, max_value, Global, 2.0)
         if Num_Results == None:
                 log.write('INFO: PatchDock did not find any global docking solution within the geometrical constraints\n')
@@ -135,6 +138,7 @@ s.\n')
                 Local = 50
         else:
                 Local = 10
+        Local = int(os.environ.get('PROSETTAC_LOCAL', Local))
         commands = [rs.local_docking('pd.' + str(i + 1) + '.pdb', Chains[0] + 'X', Chains[1] + 'Y', curr_dir + '/' + PT_params[0], curr_dir + '/' + PT_params[1], Local) for i in range(Num_Results)]
         jobs = cluster.runBatchCommands(commands, mem=params['RosettaDockMemory'])
         log.write('INFO: Local docking jobs: ' + str(jobs) + '\n')

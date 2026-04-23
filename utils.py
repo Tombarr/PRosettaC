@@ -52,10 +52,12 @@ def add_virtual_atoms(input_sdf, v_atoms_sdf, output_sdf):
 def patchdock(structs, anchors, min_dist, max_dist, num_results=1000, threshold=4.0):
     [structA, structB] = structs
     [anchorA, anchorB] = anchors
-    with open('Patchdock_cst', 'w') as f:
-        f.write(' '.join([str(s) for s in [anchorA, anchorB, min_dist, max_dist]]) + '\n')
+    # The current PatchDock build parses distanceConstraintsFile entries as
+    # residue numbers (constraining CA atoms), but PRosettaC wants to pin
+    # HETATM ligand atoms. Use the inline `distanceConstraints` directive
+    # instead, which *is* parsed by atom index. Takes a single max distance.
     os.system(PatchDock + '/buildParams.pl ' + structA + ' ' + structB + ' ; mv params.txt Patchdock_params.txt')
-    os.system('sed -i \'s/#distanceConstraintsFile file_name/distanceConstraintsFile Patchdock_cst/g\' Patchdock_params.txt')
+    os.system('sed -i \'s|^#distanceConstraints rec_atom_index lig_atom_index dist_thr|distanceConstraints ' + str(anchorA) + ' ' + str(anchorB) + ' ' + str(max_dist) + '|\' Patchdock_params.txt')
     os.system('sed -i \'s/clusterParams 0.1 4 2.0 4.0/clusterParams 0.1 4 2.0 ' + str(threshold) + '/g\' Patchdock_params.txt')
     os.system(PatchDock + '/patch_dock.Linux Patchdock_params.txt Patchdock_output')
     os.system(PatchDock + '/transOutput.pl Patchdock_output 1 ' + str(num_results))

@@ -20,6 +20,12 @@ PatchDock, or an HPC scheduler. The original HPC install still works — see
 - **`ROSETTA3_HOME`** env var (with `ROSETTA_FOL` fallback) so the image
   works under Apple Rosetta 2 on Apple Silicon, which rejects any process
   that sets an unknown `ROSETTA_*` env var.
+- **Compatibility patches** to `protac_lib.py`, `utils.py`, and `auto.py`
+  for newer RDKit (2024+) and OpenBabel 3 — see the
+  [patch notes](#compatibility-patches) below.
+- **Sample inputs** under [`examples/`](examples/) for two landmark PROTAC
+  systems (MZ1 / VHL–BRD4 and dBET6 / CRBN–BRD4) with `fetch_inputs.sh`
+  scripts that pull SMILES from PubChem.
 
 ## Quick start
 
@@ -152,6 +158,16 @@ For non-`Local` schedulers, see `cluster/Cluster.py` for the interface. Set
 | `RosettaDockMemory` | 8000 | Rosetta local docking |
 | `ProtacModelMemory` | 4000 | PROTAC linker conformer generation |
 
+### Sampling knobs (env vars)
+
+These override the hard-coded sampling counts in `auto.py`. Useful for
+cutting down runtime during development or on emulated amd64 hosts.
+
+| Env var | Default (`Full: True`) | Default (`Full: False`) | Controls |
+|---|---|---|---|
+| `PROSETTAC_GLOBAL` | 1000 | 500 | Top PatchDock solutions to carry forward |
+| `PROSETTAC_LOCAL` | 50 | 10 | Rosetta local-docking `nstruct` per hit |
+
 ## Entry points
 
 | Script | Purpose |
@@ -168,6 +184,42 @@ reference a remote PDB ID (fetched via PyMOL) or a local `.pdb` file. The
 `LIG:` line can reference a PDB ligand three-letter code or a local `.sdf`
 file. Ligand SDFs must be positioned in their binding pose within the
 corresponding receptor.
+
+## Compatibility patches
+
+Upstream PRosettaC was written against RDKit 2019–2020 and OpenBabel 2.x.
+To run on modern stacks the following source-level adjustments were made:
+
+- `utils.py` — reads either `ROSETTA_FOL` or `ROSETTA3_HOME` for the
+  Rosetta install path.
+- `utils.patchdock` — writes the anchor-distance restraint using inline
+  `distanceConstraints <rec> <lig> <max>` in the PatchDock params file
+  (current PatchDock parses the external constraints file by residue
+  number, not atom index).
+- `protac_lib.get_mcs_sdf` — writes the MCS fragment from the source
+  ligand's atoms (preserves bond orders) rather than the SMARTS pattern,
+  and identifies the anchor as the MCS atom whose PROTAC counterpart has
+  a bond to an atom outside the MCS (where the linker attaches).
+- `protac_lib._read_sdf` helper — falls back to `sanitize=False` for
+  ligands whose nitrogens get flagged as radicals by OpenBabel's addH
+  (e.g. JQ1-class thienotriazolodiazepines).
+- `protac_lib.translate_anchors` — reads both SDFs with matching sanitize
+  settings so bond-order perception doesn't desync the substructure match.
+- `protac_lib.GenConstConf` — calls `UpdatePropertyCache(strict=False)`
+  before `EmbedMolecule` on the SMARTS-built virtual-atom helper, and
+  falls back to MCS matching if the strict `GetSubstructMatches` returns
+  empty.
+- `auto.py` — reads `PROSETTAC_GLOBAL`/`PROSETTAC_LOCAL` from the
+  environment and wraps the anchor-selection exception with a traceback
+  for diagnosability.
+- `cluster/Local/Local.py` — does **not** use `set -e` in the generated
+  job script, so a single Rosetta `nstruct` failure within a batch of
+  commands doesn't kill the other commands in the batch.
+- `docker/babel-shim.sh` — translates OpenBabel 2.x-style invocations
+  (`babel in.ext out.ext`) to OpenBabel 3 (`obabel in.ext -O out.ext`),
+  since PRosettaC's `utils.py` still uses the 2.x argument order.
+
+These changes are all fork-local; upstream PRosettaC isn't modified.
 
 ## Native install (HPC / no Docker)
 

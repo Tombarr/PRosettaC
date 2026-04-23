@@ -1,0 +1,10 @@
+.env
+.env.local
+work/
+patchdock_cache/
+third_party/
+__pycache__/
+*.pyc
+log.txt
+Patchdock_Results/
+Results/

@@ -32,7 +32,11 @@ class Local(Cluster):
         return job_id
 
     def writeJobFile(self, job_file: str, commands: List[str], mem: int) -> None:
-        header = ['#!/usr/bin/env bash', 'set -e']
+        # No `set -e`: Rosetta returns non-zero if *any* nstruct model fails
+        # out of many. With set -e the first partial failure would kill the
+        # whole 12-command batch. Individual command output still goes to the
+        # job's .out file for debugging.
+        header = ['#!/usr/bin/env bash']
         if Cluster.SCHEDULER_PARAMS is not None:
             try:
                 with open(Cluster.SCHEDULER_PARAMS) as f:
