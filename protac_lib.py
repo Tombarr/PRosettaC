@@ -375,15 +375,19 @@ def GenConstConf(Heads, Docked_Heads, Head_Linkers, output_sdf, Anchor_A, v_atom
             head_B_list = head_linker.GetSubstructMatches(HeadB, uniquify=False)
             # Fall back to MCS-based matching if direct sanitized match fails
             # (sanitized vs non-sanitized bond-order perception can make the
-            # exact substructure search return empty).
+            # exact substructure search return empty). When the linker is
+            # remapped through MCS, docked_A/B must be remapped to the same
+            # MCS pattern so the tuple lengths match downstream.
             if len(head_A_list) == 0:
                 mcs = rdFMCS.FindMCS([head_linker, HeadA])
                 patt = Chem.MolFromSmarts(mcs.smartsString)
                 head_A_list = head_linker.GetSubstructMatches(patt, uniquify=False)
+                docked_A = docked_heads.GetSubstructMatch(patt)
             if len(head_B_list) == 0:
                 mcs = rdFMCS.FindMCS([head_linker, HeadB])
                 patt = Chem.MolFromSmarts(mcs.smartsString)
                 head_B_list = head_linker.GetSubstructMatches(patt, uniquify=False)
+                docked_B = docked_heads.GetSubstructMatch(patt)
             if len(head_A_list) == 0 or len(head_B_list) == 0:
                 return -1, v_atoms_sdf
 

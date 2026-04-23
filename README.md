@@ -27,25 +27,101 @@ PatchDock, or an HPC scheduler. The original HPC install still works — see
   systems (MZ1 / VHL–BRD4 and dBET6 / CRBN–BRD4) with `fetch_inputs.sh`
   scripts that pull SMILES from PubChem.
 
-## Quick start
+## Install Docker
+
+### macOS
+
+Install **Docker Desktop** — easiest path is Homebrew:
+
+```bash
+brew install --cask docker
+open -a Docker          # launch Docker Desktop once to finish setup
+```
+
+Or download the installer from
+[docker.com/products/docker-desktop](https://www.docker.com/products/docker-desktop/).
+
+On Apple Silicon, open Docker Desktop → Settings → General and make sure
+**"Use Rosetta for x86/amd64 emulation"** is enabled — the image runs as
+`linux/amd64` because Rosetta's binaries are amd64-only.
+
+### Linux
+
+The one-liner from Docker works on most distros:
+
+```bash
+curl -fsSL https://get.docker.com | sh
+sudo usermod -aG docker "$USER"     # log out and back in after this
+```
+
+Or use your package manager — e.g. on Ubuntu/Debian:
+
+```bash
+sudo apt update && sudo apt install -y docker.io docker-compose-plugin
+sudo systemctl enable --now docker
+```
+
+Verify with `docker run --rm hello-world`.
+
+## Get the code
+
+```bash
+git clone https://github.com/Tombarr/PRosettaC.git
+cd PRosettaC
+```
+
+## Build the image
 
 ```bash
 docker build -t prosettac .
-
-mkdir -p patchdock_cache work
-cp YourProtac_params.txt YourInputs.* work/
 ```
 
-Interactive — prompts for the PatchDock license on first run:
+First build downloads the upstream `rosettacommons/rosetta:serial` stage
+(~2.3 GB) and sparse-checks-out the pinned Rosetta helper scripts — takes
+10–30 min depending on network. Subsequent builds are cached.
+
+## Run
+
+You need two files in a working directory:
+
+- a params file (e.g. `Protac_params.txt`) describing the PROTAC system
+- a `.smi` file with the full PROTAC SMILES on a single line
+
+A minimal `Protac_params.txt`:
+
+```
+PDB: 5NVV 3MXF
+LIG: 9BT JQ1
+PROTAC: protac.smi
+Full: False
+ClusterName: Local
+```
+
+(This is the MZ1 example — VHL hydroxyacetyl-VH032 analog bound to BRD4's
+JQ1. The full example including `fetch_inputs.sh` for the MZ1 SMILES is
+in [`examples/MZ1_VHL_BRD4/`](examples/MZ1_VHL_BRD4/).)
+
+Stage your files and launch:
 
 ```bash
+mkdir -p work patchdock_cache
+cp examples/MZ1_VHL_BRD4/Protac_params.txt work/
+bash examples/MZ1_VHL_BRD4/fetch_inputs.sh     # writes protac.smi next to the script
+cp examples/MZ1_VHL_BRD4/protac.smi work/
+
 docker run --rm -it \
   -v "$PWD/patchdock_cache:/opt/patchdock" \
   -v "$PWD/work:/work" \
-  prosettac auto.py YourProtac_params.txt
+  prosettac auto.py Protac_params.txt
 ```
 
-Non-interactive (CI/batch):
+First run prompts for the PatchDock license info (name, affiliation,
+email) — it's submitted to the PatchDock maintainers exactly as on their
+web form and cached in `patchdock_cache/` for future runs.
+
+### Non-interactive
+
+Pass the PatchDock credentials via env vars instead:
 
 ```bash
 docker run --rm \
@@ -54,18 +130,20 @@ docker run --rm \
   -e PATCHDOCK_EMAIL="jane@example.edu" \
   -v "$PWD/patchdock_cache:/opt/patchdock" \
   -v "$PWD/work:/work" \
-  prosettac auto.py YourProtac_params.txt
+  prosettac auto.py Protac_params.txt
 ```
 
-Results land in `work/Results/` on the host.
-
-Or via Compose:
+Or via Compose (credentials from your shell env):
 
 ```bash
 PATCHDOCK_CACHE=./patchdock_cache \
 PROSETTAC_WORK=./work \
-docker compose run --rm prosettac auto.py YourProtac_params.txt
+docker compose run --rm prosettac auto.py Protac_params.txt
 ```
+
+Results land in `work/Results/` on the host. Intermediate artifacts
+(separated binaries, PatchDock and Rosetta outputs, linker conformers)
+stay in `work/` for inspection.
 
 ## How the image is assembled
 
