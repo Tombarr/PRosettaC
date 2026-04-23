@@ -1,88 +1,185 @@
-Installation requirements for PRosettaC:
+PRosettaC — Docker edition
+==========================
 
-1. Load python 3 by using:
-module load python/3.6.4
-
-2. Install RDKit, NumPy and pymol python packages. If you're using conda, use:
-conda install -c rdkit rdkit
-conda install -c anaconda numpy
-conda install -c schrodinger pymol
-
-3. Download and Install OpenBabel (http://openbabel.org/wiki/Main_Page), PatchDock (https://bioinfo3d.cs.tau.ac.il/PatchDock/) and Rosetta (https://www.rosettacommons.org/). The Rosetta versino that was used in this study is: 2019.27.post.dev+132.master.966c9eb 966c9eb6b3ab993de7aa3af5988125b7c2e464af git@github.com:RosettaCommons/main.git 2019-07-18T11:43:25.
-
-4. For job scheduling our scripts rely on PBS (https://en.wikipedia.org/wiki/Portable_Batch_System) or Sun Grid Engine/Open Grid Engine (https://en.wikipedia.org/wiki/Oracle_Grid_Engine), Slurm Workload Manager (https://slurm.schedmd.com).
-
-5. Set the following environment parameters: export PATCHDOCK=”/Path_to_PatchDock/”, export OB=”/Path_to_OpenBabel/”, export SCRIPTS_FOL=”/Path_to_the_git_folder/”, export ROSETTA_FOL=”/Path_to_Rosetta/”. Additionally, set either PBS_HOME=”/Path_to_PBS_bin_folder/”, or SGE_HOME=”/Path_to_SGE_bin_folder/”, depending on the scheduler you are using.
-
-6. When working with PBS, the environment parameter PBS_O_WORKDIR=/Path_to_the_git_folder/Patchdok_Results has to be set whereever a job is executed. You can achieve this by appending
-
-    export PBS_O_WORKDIR=/Path_to_the_git_folder/Patchdok_Results
-
-to /etc/pbs.conf (on all cluster nodes). Another option is to write this line to a file, e.g. env.txt, and then set the enrionment parameter SCHEDULER_PARAMS=/Path_to_env.txt before starting PRosettaC (see below "Additional parameters").
-When using SGE, do the same except with /etc/sge.conf. Also, use /etc/slurm.conf when using SLURM
+This fork of PRosettaC adds a containerized setup so the pipeline runs on any
+machine with Docker, without manually installing Rosetta, PatchDock, or an HPC
+scheduler. The original HPC install (PBS/SGE/SLURM) still works; see the
+"Native install" section at the bottom.
 
 
+What this fork changes
+----------------------
 
-Usage: python main.py/auto.py Protac_params.txt
-
-In order to send the main job also to the job scheduler, use:
-python extended.py/short.py Protac_params.txt
-
-Protac_param.txt will include the input files and should look like this:
-
-/////////////////////////////
-For main.py / extended.py:
-Structures: StructA.pdb StructB.pdb
-Chains: A B
-Heads: HeadA.sdf HeadB.sdf
-Anchor atoms: 11 23
-Protac: protac.smi
-Full: True
-////////////////////////////
-
-Details of files for the extended version:
-StructA.pdb is the structure of the E3 ligase (e.g. CRBN)
-StructB.pdb is the structure of the target protein (e.g. BRD4)
-A and B are the chain IDs for the E3 ligase and target. If your structures have more than one chain, write them like this: Chains: AC B. There should not be identical chain IDs for the E3 ligase and the target.
-HeadA.sdf is the E3 ligase binder (e.g. thalidomide)
-HeadB.sdf is the target binder (e.g. JQ1)
-Both HeadA and HeadB should be positioned in their appropriate binding modes within StructA and StructB.
-Anchor atoms is the number of the anchor atoms within HeadA and HeadB. An easy way to find the number of a desired atom is to open HeadA.sdf in pymol, press the L button in the toolbar, then choose "atom identifiers", and "ID". Just make sure that the anchor should be >= 1, so in case the numbering in pymol starts from 0, add one to the number of the chosen atom. The anchor atoms must be uniquely defined in the smiles representation of the molecule.
-
-/////////////////////////////
-For auto.py / short.py:
-PDB: PDB_ID1 PDB_ID2
-LIG: LIG_ID1 LIG_ID2
-PROTAC: protac.smi
-Full: True
-/////////////////////////////
-
-For a more flexible run with .pdb or .sdf file instead of the PDB or LIG IDs, for either one or both proteins, use auto.py / short.py:
-
-/////////////////////////////
-PDB: [PDB_ID1 ; pdb1.pdb] [PDB_ID2 ; pdb2.pdb]
-LIG: [LIG_ID1 ; lig1.sdf] [LIG_ID2 ; lig2.sdf]
-PROTAC: [SMILES_STRING ; protac.smi]
-Full: True
-/////////////////////////////
-
-NOTES: 
-[X ; Y] means that either one could be chosen. The only requirement is that .sdf file cannot be chosen along with PDB_ID.
-protac.smi is a file with a single line which is the smiles representation of the full PROTAC.
-Due to a reserved name, the params file must not be called params.txt.
-Use "Full: True" for a full and long run, and "Full: False" for a shorter run of lower quality, with less global and local docking runs
-Use "ClusterName: [PBS|SGE|SLURM]" to set the scheduler (if you use PBS you don't need to specify it at all, because that's the default)
+- Dockerfile + docker-compose.yml for a one-command build.
+- cluster/Local — new scheduler backend that runs batches inline on one box,
+  so the container doesn't need PBS/SGE/SLURM.
+- docker/fetch-patchdock.sh — runtime downloader that prompts for the
+  PatchDock license info (name/affiliation/email) and installs PatchDock on
+  first run. Cached via a bind-mounted volume.
+- Rosetta binary + database pulled from the official rosettacommons/rosetta
+  Docker image; the Python helper scripts (molfile_to_params.py, clean_pdb.py)
+  sparse-checked-out from the public RosettaCommons repos at pinned commit
+  SHAs.
+- Env var read as ROSETTA3_HOME (with ROSETTA_FOL fallback) so the image
+  works under Apple Rosetta 2 on Apple Silicon, which rejects any process
+  that sets an unknown ROSETTA_* env var.
 
 
-Additional parameters:
-In the config file you can also specify the optional parameters RosettaDockMemory and ProtacModelMemory. These set the
-amount of memory assigned per job at step 3 and 4 described in the paper and default to 8000mb and 4000mb, respectively.
+Quick start
+-----------
 
-You can also set the environment variable SCHEDULER_PARAMS to a file, whose content is prepended to each job file sent to the scheduler. This is useful for scheduler-specific job-level configuration (e.g. number of dedicated cpus) or for setup like activating a conda environement to run the job in etc.
+    docker build -t prosettac .
+
+    mkdir -p patchdock_cache work
+    cp YourProtac_params.txt YourInputs.* work/
+
+    # Interactive — prompts for PatchDock license on first run:
+    docker run --rm -it \
+      -v "$PWD/patchdock_cache:/opt/patchdock" \
+      -v "$PWD/work:/work" \
+      prosettac auto.py YourProtac_params.txt
+
+    # Non-interactive (CI/batch):
+    docker run --rm \
+      -e PATCHDOCK_FULLNAME="Jane Doe" \
+      -e PATCHDOCK_AFFILIATION="Example University" \
+      -e PATCHDOCK_EMAIL="jane@example.edu" \
+      -v "$PWD/patchdock_cache:/opt/patchdock" \
+      -v "$PWD/work:/work" \
+      prosettac auto.py YourProtac_params.txt
+
+Results land in work/Results/ on the host.
+
+Or via compose:
+
+    ROSETTA_IMAGE=rosettacommons/rosetta:serial \
+    PATCHDOCK_CACHE=./patchdock_cache \
+    PROSETTAC_WORK=./work \
+    docker compose run --rm prosettac auto.py YourProtac_params.txt
 
 
-How to implement a scheduler
-To add support for a specific scheduler simply implement the abstract class Cluster in cluster/Cluster.py like cluster.PBS.PBS and cluster.SGE.SGE do. Then add the scheduler as entry in cluster/__init__.py.
+How the image is assembled
+--------------------------
 
-Authors:
-Daniel Zaidman, Nir London
+The Dockerfile is multi-stage:
+
+  rosettacommons/rosetta:serial  ->  stage "rosetta"
+     |
+     |   compiled binary + libs from /usr/local/bin
+     |   Rosetta database from .../pyrosetta/database
+     v
+  continuumio/miniconda3 (Debian trixie, linux/amd64) -> final stage
+     + apt: build-essential, git, curl, file, unzip, tcsh, libgl1, ...
+     + conda env "prosettac" (python 3.11, rdkit, numpy, scikit-learn,
+                              openbabel, pymol-open-source)
+     + conda env "py27" (python 2.7 for Rosetta's molfile_to_params.py)
+     + git sparse-checkout of RosettaCommons/rosetta and RosettaCommons/tools
+       at pinned commit SHAs (SCRIPTS_REPO_SHA, TOOLS_REPO_SHA)
+     + COPY of Rosetta binaries + database from the "rosetta" stage into
+       /opt/rosetta/main/... (matches paths PRosettaC hardcodes)
+     + COPY of this repo into /opt/prosettac
+
+Runtime layout inside the container:
+
+    /opt/rosetta/main/source/bin/rosetta_scripts.default.linuxgccrelease
+    /opt/rosetta/main/source/scripts/python/public/molfile_to_params.py
+    /opt/rosetta/main/database/               (ROSETTA3_DB points here)
+    /opt/rosetta/tools/protein_tools/scripts/clean_pdb.py
+    /opt/patchdock/                           (populated on first run)
+    /opt/prosettac/                           (this repo)
+    /work                                     (bind mount — your inputs/outputs)
+
+The image is ~3 GB. Most of that is the Rosetta database.
+
+
+Configuration
+-------------
+
+Params file format (auto.py / short.py):
+
+    PDB: PDB_ID1 PDB_ID2          # or explicit .pdb files — see below
+    LIG: LIG_ID1 LIG_ID2          # or explicit .sdf files
+    PROTAC: protac.smi
+    Full: True
+    ClusterName: Local            # recommended inside Docker
+
+Instead of PDB/LIG IDs, explicit files are allowed with the [ID ; file]
+syntax — e.g. `PDB: [6BOY ; my_struct.pdb] [5T35 ; other.pdb]`.
+
+For the manual entry points (main.py / extended.py):
+
+    Structures: StructA.pdb StructB.pdb
+    Chains: A B
+    Heads: HeadA.sdf HeadB.sdf
+    Anchor atoms: 11 23
+    Protac: protac.smi
+    Full: True
+    ClusterName: Local
+
+Notes:
+- Full: False runs a shorter, lower-quality sampling.
+- The params file must not be called params.txt (reserved name).
+- Protac is a .smi file with the full PROTAC SMILES on a single line.
+- Anchor atoms are 1-indexed; the anchor must be uniquely defined in the
+  PROTAC SMILES.
+
+Scheduler options:
+- ClusterName: Local   — runs each batch inline (default for Docker).
+- ClusterName: PBS     — PBS (default if omitted; assumes qsub/qstat).
+- ClusterName: SGE     — Sun Grid Engine / OGS.
+- ClusterName: SLURM   — Slurm Workload Manager.
+
+For non-Local schedulers, see cluster/Cluster.py for the interface. Set
+SCHEDULER_PARAMS to a file whose contents are prepended to each job file —
+useful for CPU counts, conda activation lines, etc.
+
+Memory knobs (both in MB, per job):
+- RosettaDockMemory  (default 8000) — local docking step.
+- ProtacModelMemory  (default 4000) — linker conformer generation.
+
+
+Entry points
+------------
+
+  auto.py       Full automatic pipeline: fetch PDB, prepare ligands, dock,
+                generate PROTAC conformers, cluster results.
+  main.py       Manual pipeline: you supply the prepared structures, binder
+                .sdf files, chain IDs, and anchor-atom indices.
+  short.py      auto.py wrapper that submits the whole run as a single job.
+  extended.py   main.py wrapper that submits the whole run as a single job.
+
+
+Inputs
+------
+
+Input files for auto.py go in your /work bind mount. The `PDB:` line can
+reference a remote PDB ID (fetched via PyMOL) or a local .pdb file. The
+`LIG:` line can reference a PDB ligand three-letter code, or a local .sdf
+file. Ligand SDFs must be positioned in their binding pose within the
+corresponding receptor.
+
+
+Native install (HPC / no Docker)
+--------------------------------
+
+If you cannot use Docker, the original flow still works:
+
+1. Load Python 3 (the original study used 3.6.4).
+2. Install RDKit, NumPy, PyMOL, scikit-learn, OpenBabel.
+3. Install Rosetta (https://www.rosettacommons.org/) and PatchDock
+   (https://bio3d.cs.huji.ac.il/webserver/patchdock/).
+4. Set env vars:
+     export PATCHDOCK=/path/to/patchdock
+     export OB=/path/to/openbabel
+     export SCRIPTS_FOL=/path/to/this/repo/
+     export ROSETTA_FOL=/path/to/rosetta     # or ROSETTA3_HOME
+5. Set scheduler paths as appropriate (PBS_HOME, SGE_HOME, or Slurm) and
+   set PBS_O_WORKDIR / equivalent for each job.
+
+Then:   python auto.py YourProtac_params.txt
+
+
+Authors
+-------
+
+Daniel Zaidman, Nir London (original PRosettaC).

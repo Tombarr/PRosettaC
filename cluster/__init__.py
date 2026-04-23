@@ -4,6 +4,7 @@ from .Cluster import Cluster
 from .PBS.PBS import PBS
 from .SGE.SGE import SGE
 from .SLURM.SLURM import SLURM
+from .Local.Local import Local
 
 
 def getCluster(name: str) -> Cluster:
@@ -14,5 +15,7 @@ def getCluster(name: str) -> Cluster:
                 return PBS()
         elif name == 'SLURM':
                 return SLURM()
+        elif name == 'Local':
+                return Local()
         else:
                 sys.exit(f'Queue "{name}" not supported.')

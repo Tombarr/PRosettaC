@@ -1,0 +1,24 @@
+services:
+  prosettac:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        ROSETTA_IMAGE: ${ROSETTA_IMAGE:-rosettacommons/rosetta:serial}
+        ROSETTA_SRC: ${ROSETTA_SRC:-/home/rosetta/rosetta}
+    image: prosettac:latest
+    platform: linux/amd64
+    working_dir: /work
+    stdin_open: true
+    tty: true
+    volumes:
+      - ${PATCHDOCK_CACHE:-./third_party/patchdock}:/opt/patchdock
+      - ${PROSETTAC_WORK:-./work}:/work
+    environment:
+      PATCHDOCK: /opt/patchdock
+      OB: /opt/conda/bin
+      SCRIPTS_FOL: /opt/prosettac/
+      PATCHDOCK_FULLNAME: ${PATCHDOCK_FULLNAME:-}
+      PATCHDOCK_AFFILIATION: ${PATCHDOCK_AFFILIATION:-}
+      PATCHDOCK_EMAIL: ${PATCHDOCK_EMAIL:-}
+    command: ["auto.py", "Protac_params.txt"]

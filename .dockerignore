@@ -1,0 +1,12 @@
+.git
+.github
+*.pyc
+__pycache__
+work/
+third_party/
+*.log
+log.txt
+Patchdock_Results/
+Results/
+!docker/
+

@@ -4,7 +4,10 @@ import shutil
 PatchDock = os.environ["PATCHDOCK"]
 OB = os.environ["OB"]
 SCRIPTS_FOL = os.environ["SCRIPTS_FOL"]
-ROSETTA_FOL = os.environ["ROSETTA_FOL"]
+# ROSETTA3_HOME is preferred because Apple Rosetta 2 (used by Docker Desktop
+# on Apple Silicon for amd64 emulation) reserves env names starting with
+# "ROSETTA_" and refuses to start processes that set unknown ones.
+ROSETTA_FOL = os.environ.get("ROSETTA_FOL") or os.environ["ROSETTA3_HOME"]
 
 #adding hydrogens to an sdf file is done by converting it to pdb, and then back to sdf using openbabel
 def addH_sdf(sdf_file, new_sdf = None):
