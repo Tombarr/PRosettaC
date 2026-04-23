@@ -1,0 +1,5 @@
+PDB: 4W9H 3MXF
+LIG: 3JF JQ1
+PROTAC: protac.smi
+Full: False
+ClusterName: Local
