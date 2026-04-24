@@ -1,6 +1,7 @@
 .env
 .env.local
 work/
+runs/
 patchdock_cache/
 third_party/
 __pycache__/

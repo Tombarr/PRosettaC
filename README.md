@@ -2,7 +2,10 @@
 
 A containerized setup for [PRosettaC](https://github.com/LondonLab/PRosettaC)
 that runs on any machine with Docker, without manually installing Rosetta,
-PatchDock, or an HPC scheduler. The original HPC install still works — see
+PatchDock, or an HPC scheduler. On HPC clusters that use Singularity /
+Apptainer instead of Docker, there is a parallel `.def`-based path — see
+[Singularity on HPC clusters](#singularity-on-hpc-clusters). The original
+native HPC install still works — see
 [Native install](#native-install-hpc--no-docker).
 
 ## What this fork changes
@@ -26,6 +29,12 @@ PatchDock, or an HPC scheduler. The original HPC install still works — see
 - **Sample inputs** under [`examples/`](examples/) for two landmark PROTAC
   systems (MZ1 / VHL–BRD4 and dBET6 / CRBN–BRD4) with `fetch_inputs.sh`
   scripts that pull SMILES from PubChem.
+- **`hpc/scc/`** — Singularity Definition File (`prosettac.def`), SGE job
+  template (`submit.sh`), and runbook for Boston University's Shared
+  Computing Cluster. Mirrors the Dockerfile 1:1 (same multi-stage sourcing,
+  same `docker/entrypoint.sh` reused verbatim via `%runscript`) so the
+  resulting `.sif` is functionally identical to the Docker image. See
+  [Singularity on HPC clusters](#singularity-on-hpc-clusters).
 
 ## Install Docker
 
@@ -179,6 +188,33 @@ continuumio/miniconda3 (Debian trixie, linux/amd64)  ─►  final stage
 | `/work` | bind mount — your inputs/outputs |
 
 The image is about 3 GB; most of that is the Rosetta database.
+
+## Singularity on HPC clusters
+
+Most academic HPC clusters disallow Docker and provide Singularity (or its
+community fork, Apptainer) instead. For those environments, [`hpc/scc/`](hpc/scc/)
+contains a `.def` file that reproduces the Docker image natively — no
+local Docker build, no registry push, no image transfer.
+
+The one-liner is `singularity build --fakeroot prosettac.sif hpc/scc/prosettac.def`
+on a cluster build node. The definition file uses the same multi-stage
+pattern as the Dockerfile (extract Rosetta binary + database from
+`rosettacommons/rosetta:serial`, install the rest on top of
+`continuumio/miniconda3`) and reuses `docker/entrypoint.sh` verbatim as
+its `%runscript`, so the resulting `.sif` is functionally identical to
+the Docker image.
+
+`hpc/scc/` is aimed at Boston University's Shared Computing Cluster, but
+the `.def` file itself is cluster-agnostic. The runbook covers the parts
+that are site-specific: SGE (`qsub`) job script template, how to
+pre-populate the PatchDock cache on a network-enabled login node once so
+compute-node jobs run offline, `scc-singularity` wrapper bind-mount
+semantics, and an interactive smoke-test recipe.
+
+See [`hpc/scc/README.md`](hpc/scc/README.md) for the full runbook, and
+[`hpc/scc/prosettac.def`](hpc/scc/prosettac.def) for the definition file.
+For other clusters, copy `hpc/scc/` to `hpc/<yoursite>/` and adjust the
+job script header — the `.def` file should need no changes.
 
 ## Configuration
 

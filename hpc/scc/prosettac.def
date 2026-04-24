@@ -1,0 +1,124 @@
+Bootstrap: docker
+From: rosettacommons/rosetta:serial
+Stage: rosetta
+
+# ---------------------------------------------------------------------------
+# Final stage: miniconda3 + conda envs + Rosetta binary/database pulled from
+# the "rosetta" stage above. Mirrors the multi-stage Dockerfile 1:1 so the
+# resulting .sif is functionally identical to the Docker image.
+# ---------------------------------------------------------------------------
+
+Bootstrap: docker
+From: continuumio/miniconda3:latest
+Stage: final
+
+%files from rosetta
+    /usr/local/bin /opt/rosetta/main/source/bin
+    /usr/local/lib/python3.8/dist-packages/pyrosetta/database /opt/rosetta/main/database
+
+%files
+    . /opt/prosettac
+
+%post
+    set -eu
+    export DEBIAN_FRONTEND=noninteractive
+    export LANG=C.UTF-8
+    export LC_ALL=C.UTF-8
+    # Singularity's %post runs under /bin/sh (dash on Debian), so we can't
+    # `source` conda.sh — and don't need to: miniconda3 puts /opt/conda/bin
+    # on PATH and the conda CLI operates standalone. Matches the Dockerfile,
+    # which also invokes conda/mamba directly without sourcing.
+    export PATH=/opt/conda/bin:$PATH
+
+    apt-get update
+    apt-get install -y --no-install-recommends \
+        build-essential \
+        ca-certificates \
+        curl \
+        file \
+        git \
+        perl \
+        procps \
+        tcsh \
+        unzip \
+        libgl1 \
+        libxrender1 \
+        libxext6 \
+        libsm6 \
+        libglib2.0-0
+    rm -rf /var/lib/apt/lists/*
+
+    conda config --set always_yes true
+    conda config --set channel_priority strict
+    conda install -n base -c conda-forge mamba
+    mamba create -n prosettac -c conda-forge \
+        python=3.11 \
+        numpy \
+        scikit-learn \
+        rdkit \
+        openbabel \
+        pymol-open-source
+    mamba create -n py27 -c conda-forge python=2.7
+    conda clean -afy
+    ln -sf /opt/conda/envs/py27/bin/python2.7 /usr/local/bin/python2.7
+
+    # Install the OpenBabel 2.x compatibility shim into the prosettac env's
+    # bin dir. Must happen after `mamba create -n prosettac` — placing it via
+    # %files before %post would leave /opt/conda/envs/prosettac as a non-conda
+    # folder and make mamba abort on env creation.
+    install -m 0755 /opt/prosettac/docker/babel-shim.sh \
+        /opt/conda/envs/prosettac/bin/babel
+
+    SCRIPTS_REPO_SHA=068bd85322153b1ddc5a354f8cf0633a5631e9fa
+    TOOLS_REPO_SHA=bad7cd848616906e772c10274144ffe3a09fa98a
+
+    mkdir -p /opt/rosetta/main/source/scripts/python /opt/rosetta/tools
+    git clone --filter=blob:none --no-checkout \
+        https://github.com/RosettaCommons/rosetta.git /tmp/r
+    git -C /tmp/r sparse-checkout init --cone
+    git -C /tmp/r sparse-checkout set source/scripts/python/public
+    git -C /tmp/r checkout "$SCRIPTS_REPO_SHA"
+    mv /tmp/r/source/scripts/python/public /opt/rosetta/main/source/scripts/python/public
+    rm -rf /tmp/r
+
+    git clone --filter=blob:none --no-checkout \
+        https://github.com/RosettaCommons/tools.git /tmp/t
+    git -C /tmp/t sparse-checkout init --cone
+    git -C /tmp/t sparse-checkout set protein_tools
+    git -C /tmp/t checkout "$TOOLS_REPO_SHA"
+    mv /tmp/t/protein_tools /opt/rosetta/tools/protein_tools
+    rm -rf /tmp/t
+
+    # Bind-mount targets must exist in the image; Singularity will not create
+    # them on the fly the way Docker does for -v.
+    mkdir -p /work /opt/patchdock
+
+%environment
+    export PROSETTAC_HOME=/opt/prosettac
+    export ROSETTA3_HOME=/opt/rosetta
+    export ROSETTA3_DB=/opt/rosetta/main/database
+    export PATCHDOCK=/opt/patchdock
+    export OB=/opt/conda/envs/prosettac/bin
+    export SCRIPTS_FOL=/opt/prosettac/
+    export CONDA_ENV=prosettac
+    export PATH=/opt/conda/envs/prosettac/bin:/opt/conda/bin:$PATH
+
+%runscript
+    exec /opt/prosettac/docker/entrypoint.sh "$@"
+
+%help
+    PRosettaC — PROTAC ternary complex modeling pipeline.
+    Singularity image for Boston University SCC (and other SGE clusters).
+
+    Typical invocation via SGE job:
+        scc-singularity run \
+            --cleanenv \
+            --bind $CACHE:/opt/patchdock \
+            --bind $WORK:/work \
+            --pwd /work \
+            --env PATCHDOCK_FULLNAME=... \
+            --env PATCHDOCK_AFFILIATION=... \
+            --env PATCHDOCK_EMAIL=... \
+            prosettac.sif auto.py Protac_params.txt
+
+    See hpc/scc/README.md in the repo for the full runbook.
